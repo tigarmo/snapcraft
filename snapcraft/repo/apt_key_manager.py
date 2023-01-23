@@ -33,12 +33,12 @@ class AptKeyManager:
     def __init__(
         self,
         *,
-        gpg_keyring: pathlib.Path = pathlib.Path(  # noqa: B008 Function call in arg defaults
-            "/etc/apt/trusted.gpg.d/snapcraft.gpg"
+        keyrings_dir: pathlib.Path = pathlib.Path(  # noqa: B008 Function call in arg defaults
+            "/etc/apt/keyrings"
         ),
         key_assets: pathlib.Path,
     ) -> None:
-        self._gpg_keyring = gpg_keyring
+        self._keyrings_dir = keyrings_dir
         self._key_assets = key_assets
 
     def find_asset_with_key_id(self, *, key_id: str) -> Optional[pathlib.Path]:
@@ -83,7 +83,7 @@ class AptKeyManager:
 
         :returns: True if key is installed.
         """
-        keyring_file = pathlib.Path("/etc/apt/trusted.gpg.d/snapcraft.gpg")
+        keyring_file = _keyring_file(key_id)
 
         # Check if the keyring file exists first, otherwise the gpg check itself
         # creates it.
@@ -115,17 +115,17 @@ class AptKeyManager:
         else:
             return True
 
-    def install_key(self, *, key: str) -> None:
+    def install_key(self, *, key: str, key_id: str) -> None:
         """Install given key.
 
         :param key: Key to install.
 
         :raises: AptGPGKeyInstallError if unable to install key.
         """
-
+        keyring_file = _keyring_file(key_id, self._keyrings_dir)
         cmd = _gpg_prefix() + [
             "--keyring",
-            _gnupg_ring(self._gpg_keyring),
+            _gnupg_ring(keyring_file),
             "--import",
             "-",
         ]
@@ -146,7 +146,7 @@ class AptKeyManager:
             raise errors.AptGPGKeyInstallError(error.output.decode(), key=key)
 
         # Change the permissions on the file so that APT itself can read it later
-        os.chmod(self._gpg_keyring, 0o644)
+        os.chmod(keyring_file, 0o644)
 
         emit.debug(f"Installed apt repository key:\n{key}")
 
@@ -163,6 +163,8 @@ class AptKeyManager:
         env = {}
         env["LANG"] = "C.UTF-8"
 
+        keyring_file = _keyring_file(key_id, self._keyrings_dir)
+
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 # We use a tmpdir because gpg needs a "homedir" to place temporary
@@ -172,7 +174,7 @@ class AptKeyManager:
                     "--homedir",
                     tmpdir,
                     "--keyring",
-                    _gnupg_ring(self._gpg_keyring),
+                    _gnupg_ring(keyring_file),
                     "--keyserver",
                     key_server,
                     "--recv-keys",
@@ -186,7 +188,7 @@ class AptKeyManager:
                     check=True,
                     env=env,
                 )
-            os.chmod(self._gpg_keyring, 0o644)
+            os.chmod(keyring_file, 0o644)
         except subprocess.CalledProcessError as error:
             raise errors.AptGPGKeyInstallError(
                 error.output.decode(), key_id=key_id, key_server=key_server
@@ -221,14 +223,14 @@ class AptKeyManager:
 
         # Already installed, nothing to do.
         if self.is_key_installed(key_id=key_id):
-            emit.debug(f"Key {key_id} already found in {self._gpg_keyring}")
+            emit.debug(f"Key {key_id} already installed.")
             return False
 
-        emit.debug(f"Key {key_id} not found in {self._gpg_keyring}; adding")
+        emit.debug(f"Key {key_id} not found; adding")
 
         key_path = self.find_asset_with_key_id(key_id=key_id)
         if key_path is not None:
-            self.install_key(key=key_path.read_text())
+            self.install_key(key=key_path.read_text(), key_id=key_id)
         else:
             if key_server is None:
                 key_server = "keyserver.ubuntu.com"
@@ -248,3 +250,14 @@ def _gnupg_ring(keyring_file: pathlib.Path) -> str:
     This is for use in ``gpg`` commands for APT-related keys.
     """
     return f"gnupg-ring:{keyring_file}"
+
+
+def _keyring_file(
+    key_id: str, keyrings_dir: Optional[pathlib.Path] = None
+) -> pathlib.Path:
+    if keyrings_dir is None:
+        target_dir = pathlib.Path("/etc/apt/keyrings")
+    else:
+        target_dir = keyrings_dir
+    short_id = key_id[-8:].upper()
+    return target_dir / f"craft-{short_id}.gpg"

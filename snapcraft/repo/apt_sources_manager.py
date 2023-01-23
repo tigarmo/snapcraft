@@ -36,6 +36,7 @@ def _construct_deb822_source(
     formats: Optional[List[str]] = None,
     suites: List[str],
     url: str,
+    signed_by: pathlib.Path,
 ) -> str:
     """Construct deb-822 formatted sources.list config string."""
     with io.StringIO() as deb822:
@@ -62,6 +63,8 @@ def _construct_deb822_source(
 
         print(f"Architectures: {arch_text}", file=deb822)
 
+        print(f"Signed-By: {signed_by}", file=deb822)
+
         return deb822.getvalue()
 
 
@@ -78,8 +81,13 @@ class AptSourcesManager:
         sources_list_d: pathlib.Path = pathlib.Path(  # noqa: B008 Function call in arg defaults
             "/etc/apt/sources.list.d"
         ),
+        keyrings_dir: pathlib.Path = pathlib.Path(
+            # noqa: B008 Function call in arg defaults
+            "/etc/apt/keyrings"
+        ),
     ) -> None:
         self._sources_list_d = sources_list_d
+        self._keyrings_dir = keyrings_dir
 
     def _install_sources(
         self,
@@ -90,6 +98,7 @@ class AptSourcesManager:
         name: str,
         suites: List[str],
         url: str,
+        signed_by: pathlib.Path,
     ) -> bool:
         """Install sources list configuration.
 
@@ -104,6 +113,7 @@ class AptSourcesManager:
             formats=formats,
             suites=suites,
             url=url,
+            signed_by=signed_by,
         )
 
         if name not in ["default", "default-security"]:
@@ -160,6 +170,12 @@ class AptSourcesManager:
         else:
             name = re.sub(r"\W+", "_", package_repo.url)
 
+        short_id = package_repo.key_id[-8:].upper()
+        keyring_file = self._keyrings_dir / f"craft-{short_id}.gpg"
+        if not keyring_file.is_file():
+            # TODO
+            raise RuntimeError(f"Signed-by file not found: {keyring_file}")
+
         return self._install_sources(
             architectures=package_repo.architectures,
             components=package_repo.components,
@@ -167,6 +183,7 @@ class AptSourcesManager:
             name=name,
             suites=suites,
             url=package_repo.url,
+            signed_by=keyring_file,
         )
 
     def _install_sources_ppa(
