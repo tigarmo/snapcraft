@@ -29,7 +29,7 @@ from craft_cli import emit
 from craft_parts import ProjectInfo, Step, StepInfo, callbacks
 from craft_providers import Executor
 
-from snapcraft import errors, linters, pack, providers, ua_manager, utils
+from snapcraft import errors, linters, pack, providers, ua_manager, utils, variables
 from snapcraft.elf import Patcher, SonameCache, elf_utils
 from snapcraft.elf import errors as elf_errors
 from snapcraft.linters import LinterStatus
@@ -92,7 +92,10 @@ def run(command_name: str, parsed_args: "argparse.Namespace") -> None:
 
     for build_on, build_for in build_plan:
         emit.verbose(f"Running on {build_on} for {build_for}")
-        yaml_data_for_arch = yaml_utils.apply_yaml(yaml_data, build_on, build_for)
+        yaml_data_for_arch, host_vars = yaml_utils.apply_yaml(
+            yaml_data, build_on, build_for
+        )
+        emit.set_secrets(host_vars.secrets)
         parse_info = yaml_utils.extract_parse_info(yaml_data_for_arch)
         _expand_environment(
             yaml_data_for_arch,
@@ -109,6 +112,7 @@ def run(command_name: str, parsed_args: "argparse.Namespace") -> None:
             assets_dir=snap_project.assets_dir,
             start_time=start_time,
             parsed_args=parsed_args,
+            host_vars=host_vars,
         )
 
 
@@ -121,6 +125,7 @@ def _run_command(
     start_time: datetime,
     parallel_build_count: int,
     parsed_args: "argparse.Namespace",
+    host_vars: variables.HostVars,
 ) -> None:
     managed_mode = utils.is_managed_mode()
     part_names = getattr(parsed_args, "parts", None)
@@ -147,7 +152,7 @@ def _run_command(
         if command_name == "clean" and not part_names:
             _clean_provider(project, parsed_args)
         else:
-            _run_in_provider(project, command_name, parsed_args)
+            _run_in_provider(project, command_name, parsed_args, host_vars)
         return
 
     if managed_mode:
@@ -366,7 +371,10 @@ def _clean_provider(project: Project, parsed_args: "argparse.Namespace") -> None
 
 # pylint: disable-next=too-many-branches, too-many-statements
 def _run_in_provider(
-    project: Project, command_name: str, parsed_args: "argparse.Namespace"
+    project: Project,
+    command_name: str,
+    parsed_args: "argparse.Namespace",
+    host_vars: variables.HostVars,
 ) -> None:
     """Pack image in provider instance."""
     emit.debug("Checking build provider availability")
@@ -458,7 +466,9 @@ def _run_in_provider(
                 if command_name == "try":
                     _expose_prime(project_path, instance)
                 # run snapcraft inside the instance
-                instance.execute_run(cmd, check=True, cwd=output_dir)
+                instance.execute_run(
+                    cmd, check=True, cwd=output_dir, env=host_vars.mapping
+                )
         except subprocess.CalledProcessError as err:
             raise errors.SnapcraftError(
                 f"Failed to execute {command_name} in instance.",

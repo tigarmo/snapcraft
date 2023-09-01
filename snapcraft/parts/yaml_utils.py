@@ -15,15 +15,15 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """YAML utilities for Snapcraft."""
-
+import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TextIO
+from typing import Any, Dict, List, Optional, TextIO, Tuple
 
 import yaml
 import yaml.error
 
-from snapcraft import errors, utils
+from snapcraft import errors, utils, variables
 from snapcraft.extensions import apply_extensions
 from snapcraft.projects import Architecture, GrammarAwareProject
 
@@ -151,7 +151,7 @@ def load(filestream: TextIO) -> Dict[str, Any]:
 
 def apply_yaml(
     yaml_data: Dict[str, Any], build_on: str, build_for: str
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], variables.HostVars]:
     """Apply Snapcraft logic to yaml_data.
 
     Extensions are applied and advanced grammar is processed.
@@ -172,6 +172,8 @@ def apply_yaml(
         core_part["plugin"] = "nil"
         yaml_data["parts"][_CORE_PART_NAME] = core_part
 
+    is_managed = utils.is_managed_mode()
+    host_vars = variables.apply_host_variables(yaml_data, is_managed, os.environ)
     yaml_data = apply_extensions(yaml_data, arch=build_on, target_arch=build_for)
 
     if "parts" in yaml_data:
@@ -182,7 +184,7 @@ def apply_yaml(
     # replace all architectures with the architectures in the current build plan
     yaml_data["architectures"] = [Architecture(build_on=build_on, build_for=build_for)]
 
-    return yaml_data
+    return yaml_data, host_vars
 
 
 def get_snap_project() -> _SnapProject:
